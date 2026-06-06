@@ -6,7 +6,6 @@ import { ProductCard } from '@/components/store/ProductCard';
 const topProducts = [...products].sort((a, b) => b.whatsappClicks - a.whatsappClicks).slice(0, 4);
 const totalViews = products.reduce((sum, p) => sum + p.views, 0);
 const totalClicks = products.reduce((sum, p) => sum + p.whatsappClicks, 0);
-const totalIntent = products.reduce((sum, p) => sum + p.whatsappClicks + p.cartAdds, 0);
 
 export default function Home() {
   return (
@@ -16,10 +15,10 @@ export default function Home() {
           <Link href="/" className="text-xl font-black">Tiendaonline<span className="text-[#d4af37]">SaaS</span></Link>
           <div className="hidden gap-7 text-sm font-bold text-[#e7dcc0] md:flex">
             <Link href="/catalogo">Catálogo</Link>
-            <Link href="/admin">Panel admin</Link>
             <a href="#mayoristas">Mayoristas</a>
+            <a href="#contacto">Contacto</a>
           </div>
-          <Link href="/admin" className="rounded-full bg-[#d4af37] px-5 py-3 text-sm font-black text-black">Entrar admin</Link>
+          <Link href="/catalogo" className="rounded-full bg-[#d4af37] px-5 py-3 text-sm font-black text-black">Ver colección</Link>
         </div>
       </nav>
 
@@ -27,18 +26,17 @@ export default function Home() {
         <div className="absolute left-1/2 top-0 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-[#d4af37]/20 blur-3xl" />
         <div className="relative mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
-            <p className="mb-5 inline-flex rounded-full border border-[#d4af37]/25 bg-[#d4af37]/10 px-4 py-2 text-sm font-bold text-[#f3e7bf]">Tienda elegante por fuera, control total por dentro</p>
-            <h1 className="max-w-4xl text-5xl font-black leading-[.94] tracking-[-.055em] md:text-7xl lg:text-[82px]">Una tienda online con alma de marca y panel de negocio real.</h1>
-            <p className="mt-6 max-w-2xl text-lg leading-8 text-[#d7cfbd] md:text-xl">Una vitrina premium en negro y dorado para vender productos, recibir consultas y controlar el negocio desde un panel administrador con analítica e inventario.</p>
+            <p className="mb-5 inline-flex rounded-full border border-[#d4af37]/25 bg-[#d4af37]/10 px-4 py-2 text-sm font-bold text-[#f3e7bf]">Nueva colección disponible</p>
+            <h1 className="max-w-4xl text-5xl font-black leading-[.94] tracking-[-.055em] md:text-7xl lg:text-[82px]">Tu estilo se ve mejor aquí.</h1>
+            <p className="mt-6 max-w-2xl text-lg leading-8 text-[#d7cfbd] md:text-xl">Sneakers, promociones y tallas disponibles en una tienda online elegante. Consultá por WhatsApp y encontrá el par que va con vos.</p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link href="/catalogo" className="rounded-full bg-[#d4af37] px-6 py-4 font-black text-black shadow-xl shadow-[#d4af37]/20">Ver colección</Link>
-              <Link href="/admin" className="rounded-full border border-white/15 bg-white/5 px-6 py-4 font-black text-white">Ver panel admin</Link>
+              <a href="#mayoristas" className="rounded-full border border-white/15 bg-white/5 px-6 py-4 font-black text-white">Compras mayoristas</a>
             </div>
-            <div className="mt-8 grid max-w-2xl grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="mt-8 grid max-w-xl grid-cols-3 gap-3">
               <Stat value={String(totalViews)} label="Vistas" />
               <Stat value={String(totalClicks)} label="Consultas" />
               <Stat value={String(products.length)} label="Productos" />
-              <Stat value={String(wholesalers.length)} label="Mayoristas" />
             </div>
           </div>
 
@@ -50,9 +48,9 @@ export default function Home() {
                 <p className="mt-1 text-sm text-[#c7bfa9]">Sneakers, moda y promociones del mes</p>
               </div>
               <div className="mt-5 rounded-[1.8rem] bg-gradient-to-r from-[#0f0f0f] via-[#1a1710] to-[#0f0f0f] p-5">
-                <p className="text-sm font-black uppercase tracking-[.25em] text-[#d4af37]">Hero principal</p>
-                <h3 className="mt-2 text-3xl font-black">Tu estilo se ve mejor aquí</h3>
-                <p className="mt-3 text-sm leading-6 text-[#d7cfbd]">Portada emocional de tienda, no plantilla robótica.</p>
+                <p className="text-sm font-black uppercase tracking-[.25em] text-[#d4af37]">Destacado</p>
+                <h3 className="mt-2 text-3xl font-black">Black & Gold Drop</h3>
+                <p className="mt-3 text-sm leading-6 text-[#d7cfbd]">Una vitrina premium para productos que se sienten seleccionados, no tirados en una plantilla.</p>
               </div>
               <div className="mt-5 space-y-4">
                 {topProducts.map((p) => (
@@ -72,14 +70,14 @@ export default function Home() {
 
       <section className="px-5 py-12">
         <div className="mx-auto max-w-7xl rounded-[2rem] border border-white/10 bg-white/5 p-8 md:p-10">
-          <p className="font-black uppercase tracking-[.3em] text-[#d4af37]">La idea</p>
-          <h2 className="mt-2 max-w-3xl text-4xl font-black md:text-5xl">Una tienda más humana y más útil.</h2>
-          <p className="mt-4 max-w-2xl text-lg leading-8 text-[#d7cfbd]">El frente enamora al cliente. El detrás ayuda al dueño a tomar decisiones. Esa mezcla vuelve el sistema vendible.</p>
+          <p className="font-black uppercase tracking-[.3em] text-[#d4af37]">La tienda</p>
+          <h2 className="mt-2 max-w-3xl text-4xl font-black md:text-5xl">Una experiencia simple para comprar y consultar.</h2>
+          <p className="mt-4 max-w-2xl text-lg leading-8 text-[#d7cfbd]">Los clientes ven productos, tallas, precios y promociones. El panel privado queda fuera de la vista pública.</p>
           <div className="mt-10 grid gap-4 md:grid-cols-4">
-            <Feature title="Imagen premium" text="Hero visual, estilo de marca, colecciones destacadas y una presencia elegante." />
-            <Feature title="Catálogo vivo" text="Productos con precios, tallas, estado, promociones y WhatsApp." />
-            <Feature title="Panel admin" text="Analítica, productos más consultados, stock bajo y acciones rápidas." />
-            <Feature title="Mayoristas" text="Códigos, descuentos y perfiles B2B para clientes frecuentes." />
+            <Feature title="Colecciones" text="Productos destacados y ordenados para que la tienda se sienta curada." />
+            <Feature title="Tallas claras" text="Cada producto muestra disponibilidad de tallas y estado de stock." />
+            <Feature title="WhatsApp" text="Consulta directa por producto para cerrar ventas rápido." />
+            <Feature title="Mayoristas" text="Espacio comercial para compradores frecuentes y negocios." />
           </div>
         </div>
       </section>
@@ -102,7 +100,7 @@ export default function Home() {
       <section id="mayoristas" className="px-5 py-12 pb-20">
         <div className="mx-auto max-w-7xl rounded-[2rem] border border-[#d4af37]/20 bg-[#d4af37]/10 p-8 md:p-10">
           <p className="font-black uppercase tracking-[.3em] text-[#d4af37]">Mayoristas</p>
-          <h2 className="mt-2 max-w-3xl text-4xl font-black md:text-5xl">Venta al detalle y al por mayor en una misma tienda.</h2>
+          <h2 className="mt-2 max-w-3xl text-4xl font-black md:text-5xl">Venta al detalle y al por mayor.</h2>
           <div className="mt-8 grid gap-4 md:grid-cols-2">
             {wholesalers.map((client) => <div key={client.id} className="rounded-[2rem] border border-white/10 bg-black/35 p-6"><p className="text-sm font-bold text-[#f3e7bf]">Código {client.code}</p><h3 className="mt-1 text-2xl font-black">{client.businessName}</h3><p className="mt-2 text-[#c7bfa9]">{client.province} · {client.discountRate}% descuento · {crc(client.totalSpent)} comprado</p></div>)}
           </div>
