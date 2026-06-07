@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { products, wholesalers } from '@/data/demo-products';
 import { crc } from '@/lib/format';
-import { ProductVisual } from '@/components/store/ProductVisual';
+import { ProductManager } from '@/components/admin/ProductManager';
 
 const totalViews = products.reduce((sum, p) => sum + p.views, 0);
 const totalClicks = products.reduce((sum, p) => sum + p.whatsappClicks, 0);
@@ -17,7 +17,6 @@ export default function AdminPage() {
           <Link href="/" className="text-xl font-black">Tiendaonline<span className="text-[#d4af37]">SaaS</span></Link>
           <div className="flex gap-2">
             <Link href="/catalogo" className="rounded-full border border-white/10 px-4 py-2 text-sm font-black">Ver tienda</Link>
-            <button className="rounded-full bg-[#d4af37] px-4 py-2 text-sm font-black text-black">+ Agregar producto</button>
           </div>
         </nav>
 
@@ -48,21 +47,7 @@ export default function AdminPage() {
             </div>
           </div>
 
-          <div className="rounded-[2rem] bg-[#f7f0df] p-6 text-black">
-            <div className="mb-6 flex flex-col gap-4 border-b border-black/10 pb-5 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-sm font-black uppercase tracking-[.25em] text-[#8d6a10]">Gestión de productos</p>
-                <h2 className="text-3xl font-black">Inventario y acciones</h2>
-              </div>
-              <div className="flex gap-2">
-                <button className="rounded-full bg-black px-4 py-3 text-sm font-black text-white">+ Agregar</button>
-                <button className="rounded-full border border-black/10 bg-white px-4 py-3 text-sm font-black">Exportar</button>
-              </div>
-            </div>
-            <div className="space-y-3">
-              {products.map((product, index) => <InventoryRow key={product.id} product={product} index={index} />)}
-            </div>
-          </div>
+          <ProductManager />
         </section>
 
         <section className="mt-6 grid gap-4 md:grid-cols-2">
@@ -81,8 +66,4 @@ function AnalyticsRow({ product }: { product: typeof products[number] }) {
   const conversion = Math.round((product.whatsappClicks / product.views) * 100);
   const width = Math.min(100, Math.max(12, conversion * 3));
   return <div><div className="mb-2 flex justify-between gap-3"><div><p className="font-black">{product.name}</p><p className="text-xs text-[#c7bfa9]">{product.views} vistas · {product.whatsappClicks} consultas · {product.cartAdds} agregados</p></div><span className="rounded-full border border-[#d4af37]/20 bg-[#d4af37]/10 px-3 py-1 text-xs font-black text-[#f3e7bf]">{conversion}%</span></div><div className="h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-[#d4af37]" style={{ width: `${width}%` }} /></div></div>;
-}
-
-function InventoryRow({ product, index }: { product: typeof products[number]; index: number }) {
-  return <div className="rounded-[1.5rem] border border-black/10 bg-white p-4 shadow-sm"><div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div className="flex items-center gap-4"><ProductVisual index={index} compact /><div><p className="font-black">{product.name}</p><p className="text-sm text-neutral-500">{product.brand} · {product.sizes.join(', ')}</p><p className="text-sm font-bold text-[#8d6a10]">{crc(product.price)}</p></div></div><div className="flex flex-wrap gap-2 text-sm font-black"><span className={`rounded-full px-3 py-2 ${product.stockStatus === 'low' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>{product.stockStatus === 'low' ? 'Stock bajo' : 'Activo'}</span><button className="rounded-full bg-black px-3 py-2 text-white">Editar</button><button className="rounded-full border border-black/10 px-3 py-2">Ocultar</button><button className="rounded-full bg-red-50 px-3 py-2 text-red-600">Quitar</button></div></div></div>;
 }
