@@ -3,6 +3,7 @@ import { products, wholesalers } from '@/data/demo-products';
 import { crc } from '@/lib/format';
 import { ProductCard } from '@/components/store/ProductCard';
 
+const STORE_NAME = 'Karen Fashion Store';
 const topProducts = [...products].sort((a, b) => b.whatsappClicks - a.whatsappClicks).slice(0, 4);
 const totalViews = products.reduce((sum, p) => sum + p.views, 0);
 const totalClicks = products.reduce((sum, p) => sum + p.whatsappClicks, 0);
@@ -12,7 +13,10 @@ export default function Home() {
     <main className="min-h-screen bg-[#080808] text-white">
       <nav className="sticky top-0 z-50 border-b border-[#d4af37]/20 bg-black/85 px-5 py-4 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between rounded-full border border-[#d4af37]/20 bg-white/5 px-5 py-3">
-          <Link href="/" className="text-xl font-black">Tiendaonline<span className="text-[#d4af37]">SaaS</span></Link>
+          <Link href="/" className="leading-tight">
+            <span className="block text-xl font-black">{STORE_NAME}</span>
+            <span className="block text-[11px] font-bold uppercase tracking-[0.28em] text-[#d4af37]">Powered by TiendaonlineSaaS</span>
+          </Link>
           <div className="hidden gap-7 text-sm font-bold text-[#e7dcc0] md:flex">
             <Link href="/catalogo">Catálogo</Link>
             <a href="#mayoristas">Mayoristas</a>
@@ -43,7 +47,7 @@ export default function Home() {
           <div className="rounded-[2.4rem] border border-[#d4af37]/20 bg-gradient-to-br from-[#151515] to-black p-4 shadow-2xl shadow-black/30">
             <div className="rounded-[1.9rem] border border-white/10 bg-[#111] p-5">
               <div className="border-b border-white/10 pb-5">
-                <p className="text-xs uppercase tracking-[.35em] text-[#f3e7bf]">Karen Fashion Store</p>
+                <p className="text-xs uppercase tracking-[.35em] text-[#f3e7bf]">{STORE_NAME}</p>
                 <h2 className="mt-1 text-3xl font-black">Nueva colección</h2>
                 <p className="mt-1 text-sm text-[#c7bfa9]">Sneakers, moda y promociones del mes</p>
               </div>
@@ -106,6 +110,11 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      <footer id="contacto" className="border-t border-white/10 px-5 py-8 text-center text-sm text-[#c7bfa9]">
+        <p className="font-bold text-white">{STORE_NAME}</p>
+        <p className="mt-1">Catálogo digital impulsado por <span className="text-[#d4af37]">TiendaonlineSaaS</span></p>
+      </footer>
     </main>
   );
 }
