@@ -8,7 +8,7 @@ export default function CatalogoPage() {
       <div className="mx-auto max-w-7xl">
         <nav className="mb-10 flex items-center justify-between rounded-full border border-[#d4af37]/20 bg-white/5 px-5 py-3">
           <Link href="/" className="text-xl font-black">Tiendaonline<span className="text-[#d4af37]">SaaS</span></Link>
-          <Link href="/admin" className="rounded-full bg-[#d4af37] px-5 py-3 text-sm font-black text-black">Panel admin</Link>
+          <Link href="/" className="rounded-full bg-[#d4af37] px-5 py-3 text-sm font-black text-black">Inicio</Link>
         </nav>
 
         <section className="mb-10 rounded-[2rem] border border-[#d4af37]/20 bg-[#111] p-8">
