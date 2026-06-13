@@ -1,0 +1,5 @@
+    document.body.innerHTML = `<main style="padding:40px"><div class="empty"><h2>No se pudo cargar la tienda</h2><p>${escapeHtml(error.message)}</p><button class="btn-primary" onclick="location.reload()">Reintentar</button></div></main>`;
+  }
+}
+
+init();
