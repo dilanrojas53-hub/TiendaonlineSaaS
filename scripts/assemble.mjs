@@ -4,7 +4,7 @@ import path from 'node:path';
 const root = process.cwd();
 const directory = path.join(root, 'source-bundle');
 const names = (await readdir(directory))
-  .filter((name) => /^bundle\.part\d+\.b64$/.test(name))
+  .filter((name) => /^bundle\.big\d+\.b64$/.test(name))
   .sort();
 if (!names.length) throw new Error('No se encontró el bundle de la aplicación.');
 
