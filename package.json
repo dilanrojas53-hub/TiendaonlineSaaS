@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "assemble": "node scripts/assemble.mjs",
+    "predev": "npm run assemble",
     "dev": "next dev",
+    "prebuild": "npm run assemble",
     "build": "next build",
     "start": "next start",
+    "pretypecheck": "npm run assemble",
     "typecheck": "tsc --noEmit",
     "check:data": "node scripts/check-data.mjs"
   },
