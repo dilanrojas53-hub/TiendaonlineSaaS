@@ -1,0 +1,209 @@
+    if (storedFavorites) setFavorites(JSON.parse(storedFavorites));
+    if (storedProfile) setProfile(JSON.parse(storedProfile));
+    if (storedOrders) setOrders(JSON.parse(storedOrders));
+    api<StorePayload>("/api/store")
+      .then(setData)
+      .catch((cause: Error) => setError(cause.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("lua-theme", theme);
+  }, [theme]);
+  useEffect(
+    () => localStorage.setItem("lua-cart", JSON.stringify(cart)),
+    [cart],
+  );
+  useEffect(
+    () => localStorage.setItem("lua-favorites", JSON.stringify(favorites)),
+    [favorites],
+  );
+  useEffect(
+    () => localStorage.setItem("lua-profile", JSON.stringify(profile)),
+    [profile],
+  );
+  useEffect(
+    () => localStorage.setItem("lua-orders", JSON.stringify(orders)),
+    [orders],
+  );
+
+  const products = data?.products || [];
+  const categories = data?.categories || [];
+  const colors = useMemo(() => {
+    const map = new Map<string, string>();
+    products.forEach((product) =>
+      product.colors.forEach((item) => map.set(item.name, item.hex)),
+    );
+    return [...map.entries()].map(([name, hex]) => ({ name, hex }));
+  }, [products]);
+  const sizes = useMemo(
+    () => [...new Set(products.flatMap((product) => product.sizes))],
+    [products],
+  );
+
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const list = products.filter((product) => {
+      const matchQuery =
+        !query ||
+        `${product.name} ${product.brand} ${product.category}`
+          .toLowerCase()
+          .includes(query);
+      const matchCategory =
+        category === "Todos" || product.category === category;
+      const matchPrice = priceOf(product) <= maxPrice;
+      const matchSize = !size || product.sizes.includes(size);
+      const matchColor =
+        !color || product.colors.some((item) => item.name === color);
+      return (
+        matchQuery && matchCategory && matchPrice && matchSize && matchColor
+      );
+    });
+    return [...list].sort((a, b) => {
+      if (sort === "Precio menor") return priceOf(a) - priceOf(b);
+      if (sort === "Precio mayor") return priceOf(b) - priceOf(a);
+      if (sort === "Novedades")
+        return (
+          Number(b.isNew) - Number(a.isNew) ||
+          b.createdAt.localeCompare(a.createdAt)
+        );
+      return b.sold - a.sold;
+    });
+  }, [products, search, category, maxPrice, size, color, sort]);
+
+  const cartLines = useMemo(
+    () =>
+      cart
+        .map((item) => ({
+          item,
+          product: products.find((product) => product.id === item.productId),
+        }))
+        .filter((line): line is { item: CartItem; product: Product } =>
+          Boolean(line.product),
+        ),
+    [cart, products],
+  );
+  const subtotal = cartLines.reduce(
+    (sum, line) => sum + priceOf(line.product) * line.item.quantity,
+    0,
+  );
+  const shipping =
+    coupon?.shippingFree ||
+    subtotal >= (data?.settings.freeShippingThreshold || 35000)
+      ? 0
+      : data?.settings.shippingFee || 2500;
+  const discount = coupon?.discount || 0;
+  const total = Math.max(0, subtotal - discount + shipping);
+  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const flash = (message: string) => {
+    setNotice(message);
+    window.setTimeout(() => setNotice(""), 2600);
+  };
+
+  const openProduct = (product: Product) => {
+    setSelected(product);
+    setSelectedSize(product.sizes.length === 1 ? product.sizes[0] : "");
+    setSelectedColor(product.colors.length === 1 ? product.colors[0].name : "");
+    setMainImage(product.images[0]);
+  };
+
+  const toggleFavorite = (id: string) => {
+    setFavorites((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  };
+
+  const addToCart = () => {
+    if (!selected) return;
+    if (!selectedSize || !selectedColor) return flash("Elegí talla y color");
+    if (selected.stock < 1) return flash("Producto agotado");
+    setCart((current) => {
+      const index = current.findIndex(
+        (item) =>
+          item.productId === selected.id &&
+          item.size === selectedSize &&
+          item.color === selectedColor,
+      );
+      if (index < 0)
+        return [
+          ...current,
+          {
+            productId: selected.id,
+            size: selectedSize,
+            color: selectedColor,
+            quantity: 1,
+          },
+        ];
+      return current.map((item, position) =>
+        position === index
+          ? { ...item, quantity: Math.min(selected.stock, item.quantity + 1) }
+          : item,
+      );
+    });
+    setSelected(null);
+    setCartOpen(true);
+    flash("Agregado al carrito");
+  };
+
+  const changeQuantity = (index: number, delta: number) => {
+    setCart((current) =>
+      current.flatMap((item, position) => {
+        if (position !== index) return [item];
+        const product = products.find(
+          (candidate) => candidate.id === item.productId,
+        );
+        const next = Math.min(product?.stock || 0, item.quantity + delta);
+        return next > 0 ? [{ ...item, quantity: next }] : [];
+      }),
+    );
+    setCoupon(null);
+  };
+
+  const applyCoupon = async (code = couponInput) => {
+    try {
+      if (!cart.length) throw new Error("El carrito está vacío");
+      const result = await api<CouponResult>("/api/coupons/validate", {
+        method: "POST",
+        body: JSON.stringify({
+          code,
+          items: cart.map(({ productId, quantity }) => ({
+            productId,
+            quantity,
+          })),
+        }),
+      });
+      setCoupon(result);
+      setCouponInput(result.code);
+      flash(`Cupón ${result.code} aplicado`);
+    } catch (cause) {
+      setCoupon(null);
+      flash((cause as Error).message);
+    }
+  };
+
+  const openAccount = (tab: typeof accountTab) => {
+    setAccountTab(tab);
+    setAccountOpen(true);
+  };
+
+  const checkout = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      const form = new FormData(event.currentTarget);
+      const order = await api<Order>("/api/orders", {
+        method: "POST",
+        body: JSON.stringify({
+          customerName: profile.name,
+          email: profile.email,
+          phone: profile.phone,
+          address: profile.address,
+          paymentMethod: form.get("paymentMethod"),
+          couponCode: coupon?.code || null,
+          items: cart,
+        }),
+      });
