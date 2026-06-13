@@ -1,0 +1,95 @@
+"use client";
+
+import Link from "next/link";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { Order, Product, StoreSettings } from "@/lib/types";
+
+type CartItem = {
+  productId: string;
+  size: string;
+  color: string;
+  quantity: number;
+};
+type StorePayload = {
+  products: Product[];
+  settings: StoreSettings;
+  categories: string[];
+};
+type CouponResult = {
+  code: string;
+  type: "percent" | "shipping";
+  discount: number;
+  shippingFree: boolean;
+};
+type Profile = { name: string; email: string; phone: string; address: string };
+
+const defaultProfile: Profile = {
+  name: "María Soto",
+  email: "maria@email.com",
+  phone: "8888-8888",
+  address: "San José, Rohrmoser",
+};
+const money = (value: number) =>
+  new Intl.NumberFormat("es-CR", {
+    style: "currency",
+    currency: "CRC",
+    maximumFractionDigits: 0,
+  }).format(value);
+const priceOf = (product: Product) =>
+  Math.max(
+    0,
+    Math.round(product.basePrice * (1 - product.discountPercent / 100)),
+  );
+
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok)
+    throw new Error(payload.error || "No se pudo completar la solicitud");
+  return payload as T;
+}
+
+export function LuaStore() {
+  const [data, setData] = useState<StorePayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("Todos");
+  const [maxPrice, setMaxPrice] = useState(80000);
+  const [size, setSize] = useState("");
+  const [color, setColor] = useState("");
+  const [sort, setSort] = useState("Más relevantes");
+  const [favorites, setFavorites] = useState<string[]>([]);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [selected, setSelected] = useState<Product | null>(null);
+  const [selectedSize, setSelectedSize] = useState("");
+  const [selectedColor, setSelectedColor] = useState("");
+  const [mainImage, setMainImage] = useState("");
+  const [cartOpen, setCartOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [accountTab, setAccountTab] = useState<
+    "perfil" | "pedidos" | "favoritos" | "direccion"
+  >("perfil");
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [couponInput, setCouponInput] = useState("");
+  const [coupon, setCoupon] = useState<CouponResult | null>(null);
+  const [profile, setProfile] = useState<Profile>(defaultProfile);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [notice, setNotice] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const storedTheme = localStorage.getItem("lua-theme") as
+      | "light"
+      | "dark"
+      | null;
+    const storedCart = localStorage.getItem("lua-cart");
+    const storedFavorites = localStorage.getItem("lua-favorites");
+    const storedProfile = localStorage.getItem("lua-profile");
+    const storedOrders = localStorage.getItem("lua-orders");
+    if (storedTheme) setTheme(storedTheme);
+    if (storedCart) setCart(JSON.parse(storedCart));
