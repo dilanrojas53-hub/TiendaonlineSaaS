@@ -1,0 +1,341 @@
+'use strict';
+
+const http = require('node:http');
+const { promises: fs } = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { URL } = require('node:url');
+
+const ROOT = __dirname;
+const PUBLIC_DIR = path.join(ROOT, 'public');
+const DATA_FILE = process.env.STORE_DATA_PATH || path.join(ROOT, 'data', 'store.json');
+const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || '0.0.0.0';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'lua-demo-admin';
+const SESSION_SECRET = process.env.SESSION_SECRET || `${ADMIN_TOKEN}:lua-session-secret`;
+const SESSION_COOKIE = 'lua_admin_session';
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const MAX_BODY_BYTES = 1_000_000;
+const ORDER_STATUSES = new Set(['Pendiente', 'Pagado', 'Preparando', 'Enviado', 'Entregado', 'Cancelado']);
+
+let writeQueue = Promise.resolve();
+const loginAttempts = new Map();
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function json(res, status, body, headers = {}) {
+  const payload = Buffer.from(JSON.stringify(body));
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': payload.length,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...headers,
+  });
+  res.end(payload);
+}
+
+function text(res, status, body, contentType = 'text/plain; charset=utf-8', headers = {}) {
+  const payload = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  res.writeHead(status, {
+    'Content-Type': contentType,
+    'Content-Length': payload.length,
+    'X-Content-Type-Options': 'nosniff',
+    ...headers,
+  });
+  res.end(payload);
+}
+
+function parseCookies(req) {
+  const result = {};
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const index = part.indexOf('=');
+    if (index < 0) continue;
+    result[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
+  }
+  return result;
+}
+
+function base64url(input) {
+  return Buffer.from(input).toString('base64url');
+}
+
+function sign(value) {
+  return crypto.createHmac('sha256', SESSION_SECRET).update(value).digest('base64url');
+}
+
+function createSession() {
+  const payload = base64url(JSON.stringify({ role: 'admin', exp: Date.now() + SESSION_TTL_MS }));
+  return `${payload}.${sign(payload)}`;
+}
+
+function verifySession(value) {
+  if (!value || typeof value !== 'string') return false;
+  const [payload, signature] = value.split('.');
+  if (!payload || !signature) return false;
+  const expected = sign(payload);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return data.role === 'admin' && Number(data.exp) > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function cookieHeader(value, maxAgeSeconds = Math.floor(SESSION_TTL_MS / 1000)) {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  return `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}${secure}`;
+}
+
+function requireAdmin(req) {
+  if (!verifySession(parseCookies(req)[SESSION_COOKIE])) {
+    throw new HttpError(401, 'Sesión administrativa requerida');
+  }
+  const method = req.method || 'GET';
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const origin = req.headers.origin;
+    if (origin) {
+      const host = req.headers.host;
+      const expectedA = `http://${host}`;
+      const expectedB = `https://${host}`;
+      if (origin !== expectedA && origin !== expectedB) throw new HttpError(403, 'Origen no permitido');
+    }
+  }
+}
+
+function safeEqualText(a, b) {
+  const aa = Buffer.from(String(a || ''));
+  const bb = Buffer.from(String(b || ''));
+  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) throw new HttpError(413, 'Solicitud demasiado grande');
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    throw new HttpError(400, 'JSON inválido');
+  }
+}
+
+async function readStore() {
+  return JSON.parse(await fs.readFile(DATA_FILE, 'utf8'));
+}
+
+async function writeStoreAtomic(state) {
+  await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
+  const temp = `${DATA_FILE}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temp, JSON.stringify(state, null, 2), 'utf8');
+  await fs.rename(temp, DATA_FILE);
+}
+
+async function updateStore(mutator) {
+  let result;
+  let failure;
+  writeQueue = writeQueue.then(async () => {
+    try {
+      const state = await readStore();
+      result = await mutator(state);
+      await writeStoreAtomic(state);
+    } catch (error) {
+      failure = error;
+    }
+  });
+  await writeQueue;
+  if (failure) throw failure;
+  return result;
+}
+
+function currentPrice(product) {
+  return Math.max(0, Math.round(Number(product.precio || 0) * (1 - Number(product.descuento || 0) / 100)));
+}
+
+function normalizeProduct(input, existing = null) {
+  const now = new Date().toISOString();
+  const name = String(input.nombre ?? existing?.nombre ?? '').trim();
+  if (!name) throw new HttpError(400, 'El nombre del producto es obligatorio');
+  const colors = Array.isArray(input.colores)
+    ? input.colores.filter((item) => item && item.n && item.h).map((item) => ({ n: String(item.n).trim(), h: String(item.h).trim() }))
+    : existing?.colores || [];
+  const sizes = Array.isArray(input.tallas)
+    ? input.tallas.map(String).map((item) => item.trim()).filter(Boolean)
+    : existing?.tallas || [];
+  const images = Array.isArray(input.imgs)
+    ? input.imgs.map(String).map((item) => item.trim()).filter(Boolean)
+    : existing?.imgs || [];
+  return {
+    id: existing?.id || String(input.id || crypto.randomUUID()),
+    nombre: name,
+    marca: String(input.marca ?? existing?.marca ?? 'LÚA').trim() || 'LÚA',
+    categoria: String(input.categoria ?? existing?.categoria ?? 'Otros').trim() || 'Otros',
+    precio: Math.max(0, Math.round(Number(input.precio ?? existing?.precio ?? 0))),
+    descuento: Math.min(100, Math.max(0, Number(input.descuento ?? existing?.descuento ?? 0))),
+    tallas: sizes.length ? sizes : ['Única'],
+    colores: colors.length ? colors : [{ n: 'negro', h: '#1C1C1E' }],
+    stock: Math.max(0, Math.trunc(Number(input.stock ?? existing?.stock ?? 0))),
+    desc: String(input.desc ?? existing?.desc ?? '').trim(),
+    nuevo: Boolean(input.nuevo ?? existing?.nuevo ?? false),
+    vendidos: Math.max(0, Math.trunc(Number(input.vendidos ?? existing?.vendidos ?? 0))),
+    imgs: images.length ? images : [`/api/placeholder?label=${encodeURIComponent(name)}`],
+    activo: Boolean(input.activo ?? existing?.activo ?? true),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function validateCoupon(state, code, subtotal) {
+  const normalized = String(code || '').trim().toUpperCase();
+  const coupon = state.coupons.find((item) => item.code === normalized);
+  if (!coupon || !coupon.active) throw new HttpError(400, 'Cupón inválido o inactivo');
+  if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() < Date.now()) throw new HttpError(400, 'El cupón expiró');
+  if (subtotal < Number(coupon.min || 0)) throw new HttpError(400, `Compra mínima requerida: ₡${coupon.min}`);
+  return coupon;
+}
+
+function calculateCart(state, requestedItems, couponCode = null) {
+  if (!Array.isArray(requestedItems) || requestedItems.length === 0) throw new HttpError(400, 'El carrito está vacío');
+  if (requestedItems.length > 100) throw new HttpError(400, 'Demasiados productos en el carrito');
+  const items = requestedItems.map((requested) => {
+    const product = state.products.find((candidate) => candidate.id === String(requested.productId) && candidate.activo);
+    if (!product) throw new HttpError(404, 'Uno de los productos ya no está disponible');
+    const quantity = Math.max(1, Math.trunc(Number(requested.quantity || requested.qty || 1)));
+    if (quantity > 20) throw new HttpError(400, 'La cantidad máxima por producto es 20');
+    if (quantity > product.stock) throw new HttpError(409, `Stock insuficiente para ${product.nombre}`);
+    const size = String(requested.size || requested.talla || '');
+    const color = String(requested.color || '');
+    if (!product.tallas.includes(size)) throw new HttpError(400, `Talla inválida para ${product.nombre}`);
+    if (!product.colores.some((item) => item.n === color)) throw new HttpError(400, `Color inválido para ${product.nombre}`);
+    const unitPrice = currentPrice(product);
+    return {
+      productId: product.id,
+      name: product.nombre,
+      size,
+      color,
+      quantity,
+      unitPrice,
+      lineTotal: unitPrice * quantity,
+    };
+  });
+  const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
+  let discount = 0;
+  let shipping = subtotal >= Number(state.settings.envioGratis || 0) ? 0 : Number(state.settings.envio || 0);
+  let appliedCoupon = null;
+  if (couponCode) {
+    appliedCoupon = validateCoupon(state, couponCode, subtotal);
+    if (appliedCoupon.type === 'percent') discount = Math.round(subtotal * (Number(appliedCoupon.value || 0) / 100));
+    if (appliedCoupon.type === 'shipping') shipping = 0;
+  }
+  return {
+    items,
+    subtotal,
+    discount,
+    shipping,
+    tax: 0,
+    total: Math.max(0, subtotal - discount) + shipping,
+    couponCode: appliedCoupon?.code || null,
+  };
+}
+
+function rebuildCustomer(state, email) {
+  const normalized = String(email).toLowerCase();
+  const valid = state.orders.filter((order) => order.email.toLowerCase() === normalized && order.status !== 'Cancelado');
+  const existingIndex = state.customers.findIndex((customer) => customer.email.toLowerCase() === normalized);
+  if (!valid.length) {
+    if (existingIndex >= 0) state.customers.splice(existingIndex, 1);
+    return;
+  }
+  const latest = [...valid].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const customer = {
+    email: latest.email,
+    name: latest.customerName,
+    phone: latest.phone,
+    address: latest.address,
+    orderCount: valid.length,
+    totalSpent: valid.reduce((sum, order) => sum + order.total, 0),
+    lastOrderAt: latest.createdAt,
+  };
+  if (existingIndex >= 0) state.customers[existingIndex] = customer;
+  else state.customers.unshift(customer);
+}
+
+function dashboard(state) {
+  const validOrders = state.orders.filter((order) => order.status !== 'Cancelado');
+  const revenue = validOrders.reduce((sum, order) => sum + order.total, 0);
+  const dailySales = {};
+  for (const order of validOrders) {
+    const day = order.createdAt.slice(0, 10);
+    dailySales[day] = (dailySales[day] || 0) + order.total;
+  }
+  const categorySales = {};
+  for (const product of state.products) categorySales[product.categoria] = (categorySales[product.categoria] || 0) + product.vendidos;
+  return {
+    metrics: {
+      revenue,
+      orders: validOrders.length,
+      averageTicket: validOrders.length ? Math.round(revenue / validOrders.length) : 0,
+      customers: state.customers.length,
+      activeProducts: state.products.filter((product) => product.activo).length,
+      lowStock: state.products.filter((product) => product.activo && product.stock <= 3).length,
+    },
+    dailySales: Object.entries(dailySales).sort(([a], [b]) => a.localeCompare(b)).slice(-14),
+    categorySales,
+    topProducts: [...state.products].sort((a, b) => b.vendidos - a.vendidos).slice(0, 6),
+    lowStockProducts: state.products.filter((product) => product.activo && product.stock <= 3).sort((a, b) => a.stock - b.stock),
+    recentOrders: state.orders.slice(0, 10),
+    customers: state.customers,
+    movements: state.movements.slice(0, 100),
+  };
+}
+
+function getClientIp(req) {
+  return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+}
+
+function checkLoginRate(req) {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  const record = loginAttempts.get(ip) || { count: 0, resetAt: now + 10 * 60 * 1000 };
+  if (record.resetAt < now) {
+    record.count = 0;
+    record.resetAt = now + 10 * 60 * 1000;
+  }
+  record.count += 1;
+  loginAttempts.set(ip, record);
+  if (record.count > 15) throw new HttpError(429, 'Demasiados intentos. Probá más tarde');
+}
+
+async function handleApi(req, res, url) {
+  const pathname = url.pathname;
+
+  if (req.method === 'GET' && pathname === '/api/health') return json(res, 200, { ok: true, service: 'lua-commerce' });
+
+  if (req.method === 'GET' && pathname === '/api/store') {
+    const state = await readStore();
+    return json(res, 200, {
+      products: state.products.filter((product) => product.activo),
+      settings: state.settings,
+      categories: [...new Set(state.products.filter((product) => product.activo).map((product) => product.categoria))],
+    });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/placeholder') {
+    const label = String(url.searchParams.get('label') || 'LÚA').slice(0, 50).replace(/[<>&"']/g, '');
+    const bgRaw = String(url.searchParams.get('bg') || 'EDDCCB');
+    const bg = /^[0-9a-f]{6}$/i.test(bgRaw) ? `#${bgRaw}` : '#EDDCCB';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${bg}"/><stop offset="1" stop-color="#fff"/></linearGradient></defs><rect width="800" height="800" fill="url(#g)"/><circle cx="650" cy="150" r="190" fill="rgba(255,255,255,.25)"/><text x="50%" y="52%" text-anchor="middle" font-family="Arial,sans-serif" font-size="48" font-weight="800" fill="#5B3E31">${label}</text></svg>`;

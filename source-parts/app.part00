@@ -1,0 +1,236 @@
+'use strict';
+
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const money = (value) => new Intl.NumberFormat('es-CR', { style: 'currency', currency: 'CRC', maximumFractionDigits: 0 }).format(Number(value || 0));
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+const priceOf = (product) => Math.max(0, Math.round(product.precio * (1 - (product.descuento || 0) / 100)));
+
+const state = {
+  store: null,
+  products: [],
+  settings: null,
+  categories: [],
+  cart: JSON.parse(localStorage.getItem('lua-cart-v2') || '[]'),
+  favorites: JSON.parse(localStorage.getItem('lua-favorites-v2') || '[]'),
+  profile: JSON.parse(localStorage.getItem('lua-profile-v2') || '{"name":"María Soto","email":"maria@email.com","phone":"8888-8888","address":"San José, Rohrmoser"}'),
+  orders: JSON.parse(localStorage.getItem('lua-orders-v2') || '[]'),
+  theme: localStorage.getItem('lua-theme-v2') || 'light',
+  filters: { categories: [], maxPrice: 80000, sizes: [], colors: [], query: '', sort: 'Más relevantes' },
+  selectedProduct: null,
+  selectedSize: '',
+  selectedColor: '',
+  coupon: null,
+  admin: { authenticated: false, data: null, products: [], orders: [], coupons: [], settings: null, section: 'dashboard', editingProduct: null },
+};
+
+async function api(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'No se pudo completar la solicitud');
+  return payload;
+}
+
+function persist() {
+  localStorage.setItem('lua-cart-v2', JSON.stringify(state.cart));
+  localStorage.setItem('lua-favorites-v2', JSON.stringify(state.favorites));
+  localStorage.setItem('lua-profile-v2', JSON.stringify(state.profile));
+  localStorage.setItem('lua-orders-v2', JSON.stringify(state.orders));
+  localStorage.setItem('lua-theme-v2', state.theme);
+}
+
+function toast(message) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = message;
+  $('#toasts').appendChild(el);
+  setTimeout(() => el.remove(), 2700);
+}
+
+function setTheme(theme) {
+  state.theme = theme;
+  document.documentElement.dataset.theme = theme;
+  $('#btn-theme').textContent = theme === 'light' ? '☾' : '☀';
+  persist();
+}
+
+function activeProducts() {
+  return state.products.filter((product) => product.activo);
+}
+
+function badge(product) {
+  if (product.stock === 0) return '<span class="badge agotado">Agotado</span>';
+  if (product.stock <= 3) return '<span class="badge poco">Pocas unidades</span>';
+  if (product.nuevo) return '<span class="badge nuevo">Nuevo</span>';
+  return '';
+}
+
+function productCard(product) {
+  const favorite = state.favorites.includes(product.id);
+  return `<article class="card-product" data-product="${escapeHtml(product.id)}">
+    <div class="card-img"><img src="${escapeHtml(product.imgs[0])}" alt="${escapeHtml(product.nombre)}" loading="lazy">${badge(product)}
+      <button class="fav-btn ${favorite ? 'active' : ''}" data-favorite="${escapeHtml(product.id)}" aria-label="Favorito">♡</button>
+    </div>
+    <div class="card-body"><h3>${escapeHtml(product.nombre)}</h3><div class="card-marca">${escapeHtml(product.marca)}</div><div class="card-price"><span class="price-now">${money(priceOf(product))}</span>${product.descuento ? `<span class="price-old">${money(product.precio)}</span>` : ''}</div></div>
+  </article>`;
+}
+
+function renderCategories() {
+  $('#categories').innerHTML = state.categories.map((category) => `<button class="cat-card" data-category-card="${escapeHtml(category)}">${escapeHtml(category)}</button>`).join('');
+  $('#filter-cats').innerHTML = state.categories.map((category) => `<button class="chip ${state.filters.categories.includes(category) ? 'active' : ''}" data-filter-category="${escapeHtml(category)}">${escapeHtml(category)}</button>`).join('');
+  const sizes = [...new Set(activeProducts().flatMap((product) => product.tallas))];
+  $('#filter-tallas').innerHTML = sizes.map((size) => `<button class="chip ${state.filters.sizes.includes(size) ? 'active' : ''}" data-filter-size="${escapeHtml(size)}">${escapeHtml(size)}</button>`).join('');
+  const colors = new Map();
+  activeProducts().forEach((product) => product.colores.forEach((color) => colors.set(color.n, color.h)));
+  $('#filter-colores').innerHTML = [...colors.entries()].map(([name, hex]) => `<button class="color-swatch ${state.filters.colors.includes(name) ? 'active' : ''}" style="background:${escapeHtml(hex)}" title="${escapeHtml(name)}" data-filter-color="${escapeHtml(name)}"></button>`).join('');
+}
+
+function filteredProducts() {
+  const query = state.filters.query.trim().toLowerCase();
+  const list = activeProducts().filter((product) => {
+    const haystack = `${product.nombre} ${product.marca} ${product.categoria}`.toLowerCase();
+    return (!query || haystack.includes(query))
+      && (!state.filters.categories.length || state.filters.categories.includes(product.categoria))
+      && priceOf(product) <= state.filters.maxPrice
+      && (!state.filters.sizes.length || state.filters.sizes.some((size) => product.tallas.includes(size)))
+      && (!state.filters.colors.length || state.filters.colors.some((color) => product.colores.some((item) => item.n === color)));
+  });
+  return list.sort((a, b) => {
+    if (state.filters.sort === 'Precio menor') return priceOf(a) - priceOf(b);
+    if (state.filters.sort === 'Precio mayor') return priceOf(b) - priceOf(a);
+    if (state.filters.sort === 'Novedades') return Number(b.nuevo) - Number(a.nuevo) || b.createdAt.localeCompare(a.createdAt);
+    return b.vendidos - a.vendidos;
+  });
+}
+
+function renderCatalog() {
+  const filtered = filteredProducts();
+  $('#grid-catalogo').innerHTML = filtered.length ? filtered.map(productCard).join('') : '<div class="empty">No encontramos productos con esos filtros.</div>';
+  $('#result-count').textContent = `${filtered.length} productos`;
+  $('#carousel-nuevos').innerHTML = activeProducts().filter((product) => product.nuevo).slice(0, 8).map(productCard).join('');
+  $('#grid-vendidos').innerHTML = [...activeProducts()].sort((a, b) => b.vendidos - a.vendidos).slice(0, 4).map(productCard).join('');
+  updateCounters();
+}
+
+function updateCounters() {
+  $('#fav-count').textContent = state.favorites.length;
+  $('#cart-count').textContent = state.cart.reduce((sum, item) => sum + item.quantity, 0);
+}
+
+function openProduct(id) {
+  const product = state.products.find((item) => item.id === String(id));
+  if (!product) return;
+  state.selectedProduct = product;
+  state.selectedSize = product.tallas.length === 1 ? product.tallas[0] : '';
+  state.selectedColor = product.colores.length === 1 ? product.colores[0].n : '';
+  $('#mp-nombre').textContent = product.nombre;
+  $('#mp-marca').textContent = `${product.marca} · ${product.categoria}`;
+  $('#mp-precio').textContent = money(priceOf(product));
+  $('#mp-precio-old').textContent = product.descuento ? money(product.precio) : '';
+  $('#mp-desc').textContent = product.desc;
+  $('#mp-img-main').src = product.imgs[0];
+  $('#mp-thumbs').innerHTML = product.imgs.map((image, index) => `<button class="thumb ${index === 0 ? 'active' : ''}" data-thumb="${escapeHtml(image)}"><img src="${escapeHtml(image)}" alt=""></button>`).join('');
+  $('#mp-tallas').innerHTML = product.tallas.map((size) => `<button class="chip ${state.selectedSize === size ? 'active' : ''}" data-product-size="${escapeHtml(size)}">${escapeHtml(size)}</button>`).join('');
+  $('#mp-colores').innerHTML = product.colores.map((color) => `<button class="chip ${state.selectedColor === color.n ? 'active' : ''}" data-product-color="${escapeHtml(color.n)}"><span class="color-swatch" style="display:inline-block;background:${escapeHtml(color.h)};width:16px;height:16px"></span>${escapeHtml(color.n)}</button>`).join('');
+  $('#mp-stock').textContent = product.stock === 0 ? 'Agotado' : product.stock <= 3 ? `Solo quedan ${product.stock}` : `${product.stock} unidades disponibles`;
+  $('#mp-add').disabled = product.stock === 0;
+  $('#mp-fav').classList.toggle('active', state.favorites.includes(product.id));
+  $('#modal-producto').classList.add('open');
+}
+
+function toggleFavorite(id) {
+  id = String(id);
+  state.favorites = state.favorites.includes(id) ? state.favorites.filter((item) => item !== id) : [...state.favorites, id];
+  persist();
+  renderCatalog();
+  if (state.selectedProduct?.id === id) $('#mp-fav').classList.toggle('active', state.favorites.includes(id));
+}
+
+function addSelectedToCart() {
+  const product = state.selectedProduct;
+  if (!product) return;
+  if (!state.selectedSize || !state.selectedColor) return toast('Elegí talla y color');
+  if (!product.stock) return toast('Producto agotado');
+  const existing = state.cart.find((item) => item.productId === product.id && item.size === state.selectedSize && item.color === state.selectedColor);
+  if (existing) existing.quantity = Math.min(product.stock, existing.quantity + 1);
+  else state.cart.push({ productId: product.id, size: state.selectedSize, color: state.selectedColor, quantity: 1 });
+  state.coupon = null;
+  persist();
+  renderCart();
+  $('#modal-producto').classList.remove('open');
+  openCart();
+  toast('Agregado al carrito');
+}
+
+function cartLines() {
+  return state.cart.map((item, index) => ({ item, index, product: state.products.find((product) => product.id === item.productId) })).filter((line) => line.product);
+}
+
+function totals() {
+  const subtotal = cartLines().reduce((sum, line) => sum + priceOf(line.product) * line.item.quantity, 0);
+  const discount = state.coupon?.discount || 0;
+  const shipping = state.coupon?.shippingFree || subtotal >= Number(state.settings?.envioGratis || 35000) ? 0 : Number(state.settings?.envio || 2500);
+  return { subtotal, discount, shipping, total: Math.max(0, subtotal - discount) + shipping };
+}
+
+function renderCart() {
+  const lines = cartLines();
+  $('#cart-items').innerHTML = lines.length ? lines.map(({ item, product, index }) => `<article class="cart-item"><img src="${escapeHtml(product.imgs[0])}" alt=""><div style="flex:1"><strong>${escapeHtml(product.nombre)}</strong><small style="display:block;color:var(--text-2)">${escapeHtml(item.size)} · ${escapeHtml(item.color)}</small><div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><div class="qty"><button data-qty="-1" data-index="${index}">−</button><span>${item.quantity}</span><button data-qty="1" data-index="${index}">+</button></div><b>${money(priceOf(product) * item.quantity)}</b></div></div><button class="danger" data-remove-cart="${index}">×</button></article>`).join('') : '<div class="empty">Tu carrito está vacío.</div>';
+  const sum = totals();
+  $('#sum-subtotal').textContent = money(sum.subtotal);
+  $('#sum-desc').textContent = `-${money(sum.discount)}`;
+  $('#sum-envio').textContent = sum.shipping ? money(sum.shipping) : 'Gratis';
+  $('#sum-total').textContent = money(sum.total);
+  $('#ck-total').textContent = money(sum.total);
+  $('#go-checkout').disabled = !lines.length;
+  $('#coupon-msg').textContent = state.coupon ? `Cupón ${state.coupon.code} aplicado` : '';
+  updateCounters();
+}
+
+function changeQuantity(index, delta) {
+  const item = state.cart[index];
+  if (!item) return;
+  const product = state.products.find((candidate) => candidate.id === item.productId);
+  item.quantity = Math.min(product?.stock || 0, item.quantity + delta);
+  if (item.quantity <= 0) state.cart.splice(index, 1);
+  state.coupon = null;
+  persist();
+  renderCart();
+}
+
+async function applyCoupon(code = $('#coupon-input').value) {
+  if (!state.cart.length) return toast('El carrito está vacío');
+  try {
+    state.coupon = await api('/api/coupons/validate', { method: 'POST', body: JSON.stringify({ code, items: state.cart }) });
+    $('#coupon-input').value = state.coupon.code;
+    renderCart();
+    toast(`Cupón ${state.coupon.code} aplicado`);
+  } catch (error) {
+    state.coupon = null;
+    renderCart();
+    toast(error.message);
+  }
+}
+
+function openCart() {
+  $('#drawer-cart').classList.add('open');
+  $('#drawer-backdrop').classList.remove('hidden');
+}
+function closeCart() {
+  $('#drawer-cart').classList.remove('open');
+  $('#drawer-backdrop').classList.add('hidden');
+}
+
+function renderAccount(tab = 'perfil') {
+  $$('#account-tabs .tab-btn').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
+  const content = $('#tab-content');
+  if (tab === 'perfil') content.innerHTML = `<section class="account-card"><h3>Perfil</h3><div class="form-grid"><label>Nombre<input id="profile-name" class="input" value="${escapeHtml(state.profile.name)}"></label><label>Email<input id="profile-email" type="email" class="input" value="${escapeHtml(state.profile.email)}"></label><label>Teléfono<input id="profile-phone" class="input" value="${escapeHtml(state.profile.phone)}"></label></div><button class="btn-primary" id="save-profile" style="margin-top:14px">Guardar perfil</button></section>`;
+  if (tab === 'direccion') content.innerHTML = `<section class="account-card"><h3>Dirección de envío</h3><textarea id="profile-address">${escapeHtml(state.profile.address)}</textarea><button class="btn-primary" id="save-address" style="margin-top:14px">Guardar dirección</button></section>`;
+  if (tab === 'favoritos') {
+    const products = state.products.filter((product) => state.favorites.includes(product.id));
+    content.innerHTML = products.length ? `<div class="grid-products">${products.map(productCard).join('')}</div>` : '<div class="empty">Todavía no guardaste favoritos.</div>';
+  }

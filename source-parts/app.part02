@@ -1,0 +1,144 @@
+  $('#admin-content').innerHTML = `<div class="admin-grid"><form class="admin-card admin-form" id="coupon-form"><h3>Crear o actualizar cupón</h3><label>Código<input id="coupon-code-admin" class="input" required placeholder="VERANO20"></label><label>Tipo<select id="coupon-type-admin"><option value="percent">Porcentaje</option><option value="shipping">Envío gratis</option></select></label><label>Valor %<input id="coupon-value-admin" class="input" type="number" min="0" max="100" value="10"></label><label>Compra mínima<input id="coupon-min-admin" class="input" type="number" min="0" value="0"></label><label>Expira<input id="coupon-expiry-admin" class="input" type="datetime-local"></label><button class="btn-primary">Guardar cupón</button></form><section class="admin-card"><h3>Cupones</h3><div class="coupon-list">${state.admin.coupons.map((coupon) => `<div class="coupon-row-card"><div><strong>${escapeHtml(coupon.code)}</strong><small style="display:block">${coupon.type === 'percent' ? `${coupon.value}%` : 'Envío gratis'} · mínimo ${money(coupon.min)}</small></div><button class="danger" data-delete-coupon="${escapeHtml(coupon.code)}">Eliminar</button></div>`).join('')}</div></section></div>`;
+}
+
+async function saveCoupon(event) {
+  event.preventDefault();
+  try { await api('/api/admin/coupons', { method: 'POST', body: JSON.stringify({ code: $('#coupon-code-admin').value, type: $('#coupon-type-admin').value, value: Number($('#coupon-value-admin').value), min: Number($('#coupon-min-admin').value), expiresAt: $('#coupon-expiry-admin').value || null }) }); await loadAdmin(); toast('Cupón guardado'); } catch (error) { toast(error.message); }
+}
+async function deleteCoupon(code) {
+  try { await api(`/api/admin/coupons?code=${encodeURIComponent(code)}`, { method: 'DELETE' }); await loadAdmin(); toast('Cupón eliminado'); } catch (error) { toast(error.message); }
+}
+
+function renderAdminAnalytics() {
+  const maxProduct = Math.max(1, ...state.admin.data.topProducts.map((product) => product.vendidos));
+  const categories = Object.entries(state.admin.data.categorySales);
+  const maxCategory = Math.max(1, ...categories.map(([, value]) => value));
+  $('#admin-content').innerHTML = `<div class="admin-grid"><section class="admin-card"><h3>Top productos</h3><div class="chart-list">${state.admin.data.topProducts.map((product) => `<div class="chart-row"><span>${escapeHtml(product.nombre)}</span><div class="chart-bar"><span style="width:${product.vendidos / maxProduct * 100}%"></span></div><b>${product.vendidos}</b></div>`).join('')}</div></section><section class="admin-card"><h3>Ventas por categoría</h3><div class="chart-list">${categories.map(([category, value]) => `<div class="chart-row"><span>${escapeHtml(category)}</span><div class="chart-bar"><span style="width:${value / maxCategory * 100}%"></span></div><b>${value}</b></div>`).join('')}</div></section></div>`;
+}
+
+function renderAdminSettings() {
+  const s = state.admin.settings;
+  $('#admin-content').innerHTML = `<form class="admin-card admin-form" id="settings-form"><h3>Configuración de tienda</h3><div class="form-grid"><label>Nombre<input id="settings-name" class="input" value="${escapeHtml(s.nombre)}"></label><label>WhatsApp<input id="settings-whatsapp" class="input" value="${escapeHtml(s.whatsapp)}"></label><label>IVA %<input id="settings-tax" class="input" type="number" value="${s.iva}"></label><label>Envío<input id="settings-shipping" class="input" type="number" value="${s.envio}"></label><label>Envío gratis desde<input id="settings-free" class="input" type="number" value="${s.envioGratis}"></label><label>Cupón promocionado<input id="settings-promo" class="input" value="${escapeHtml(s.promoCode)}"></label><label style="grid-column:1/-1">Título principal<input id="settings-title" class="input" value="${escapeHtml(s.heroTitulo)}"></label><label style="grid-column:1/-1">Subtítulo<textarea id="settings-subtitle">${escapeHtml(s.heroSubtitulo)}</textarea></label></div><button class="btn-primary">Guardar configuración</button></form>`;
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  try { await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ nombre: $('#settings-name').value, whatsapp: $('#settings-whatsapp').value, iva: Number($('#settings-tax').value), envio: Number($('#settings-shipping').value), envioGratis: Number($('#settings-free').value), promoCode: $('#settings-promo').value, heroTitulo: $('#settings-title').value, heroSubtitulo: $('#settings-subtitle').value }) }); await reloadStoreAndAdmin(); toast('Configuración guardada'); } catch (error) { toast(error.message); }
+}
+
+async function reloadStoreAndAdmin() {
+  const store = await api('/api/store');
+  state.store = store;
+  state.products = store.products;
+  state.settings = store.settings;
+  state.categories = store.categories;
+  await loadAdmin();
+  applyStoreSettings();
+  renderCategories();
+  renderCatalog();
+  renderCart();
+}
+
+function applyStoreSettings() {
+  $('#hero-title').textContent = state.settings.heroTitulo;
+  $('#hero-subtitle').textContent = state.settings.heroSubtitulo;
+  $('#promo-code').textContent = state.settings.promoCode;
+}
+
+function bindEvents() {
+  document.addEventListener('click', (event) => {
+    const product = event.target.closest('[data-product]');
+    const favorite = event.target.closest('[data-favorite]');
+    if (favorite) { event.stopPropagation(); toggleFavorite(favorite.dataset.favorite); return; }
+    if (product) { openProduct(product.dataset.product); return; }
+    const category = event.target.closest('[data-category-card]');
+    if (category) { state.filters.categories = [category.dataset.categoryCard]; renderCategories(); renderCatalog(); $('#catalogo').scrollIntoView({ behavior: 'smooth' }); return; }
+    const filterCategory = event.target.closest('[data-filter-category]');
+    if (filterCategory) { const value = filterCategory.dataset.filterCategory; state.filters.categories = state.filters.categories.includes(value) ? state.filters.categories.filter((item) => item !== value) : [...state.filters.categories, value]; renderCategories(); renderCatalog(); return; }
+    const filterSize = event.target.closest('[data-filter-size]');
+    if (filterSize) { const value = filterSize.dataset.filterSize; state.filters.sizes = state.filters.sizes.includes(value) ? state.filters.sizes.filter((item) => item !== value) : [...state.filters.sizes, value]; renderCategories(); renderCatalog(); return; }
+    const filterColor = event.target.closest('[data-filter-color]');
+    if (filterColor) { const value = filterColor.dataset.filterColor; state.filters.colors = state.filters.colors.includes(value) ? state.filters.colors.filter((item) => item !== value) : [...state.filters.colors, value]; renderCategories(); renderCatalog(); return; }
+    const thumb = event.target.closest('[data-thumb]');
+    if (thumb) { $('#mp-img-main').src = thumb.dataset.thumb; $$('#mp-thumbs .thumb').forEach((item) => item.classList.toggle('active', item === thumb)); return; }
+    const size = event.target.closest('[data-product-size]');
+    if (size) { state.selectedSize = size.dataset.productSize; $$('#mp-tallas .chip').forEach((item) => item.classList.toggle('active', item === size)); return; }
+    const color = event.target.closest('[data-product-color]');
+    if (color) { state.selectedColor = color.dataset.productColor; $$('#mp-colores .chip').forEach((item) => item.classList.toggle('active', item === color)); return; }
+    const closeModal = event.target.closest('[data-close-modal]');
+    if (closeModal) { $(`#${closeModal.dataset.closeModal}`).classList.remove('open'); return; }
+    const closePanel = event.target.closest('[data-close-panel]');
+    if (closePanel) { $(`#${closePanel.dataset.closePanel}`).classList.remove('open'); return; }
+    const qty = event.target.closest('[data-qty]');
+    if (qty) { changeQuantity(Number(qty.dataset.index), Number(qty.dataset.qty)); return; }
+    const remove = event.target.closest('[data-remove-cart]');
+    if (remove) { state.cart.splice(Number(remove.dataset.removeCart), 1); state.coupon = null; persist(); renderCart(); return; }
+    const tab = event.target.closest('[data-tab]');
+    if (tab) { renderAccount(tab.dataset.tab); return; }
+    const adminSection = event.target.closest('[data-sec]');
+    if (adminSection) { renderAdmin(adminSection.dataset.sec); return; }
+    const edit = event.target.closest('[data-edit-product]');
+    if (edit) { productEditor(state.admin.products.find((item) => item.id === edit.dataset.editProduct)); return; }
+    const archive = event.target.closest('[data-delete-product]');
+    if (archive) { archiveProduct(archive.dataset.deleteProduct); return; }
+    const stock = event.target.closest('[data-stock]');
+    if (stock) { adjustStock(stock.dataset.productId, Number(stock.dataset.stock)); return; }
+    const deleteCouponButton = event.target.closest('[data-delete-coupon]');
+    if (deleteCouponButton) { deleteCoupon(deleteCouponButton.dataset.deleteCoupon); return; }
+    if (event.target.id === 'new-product') productEditor();
+    if (event.target.id === 'cancel-product') $('#product-editor').innerHTML = '';
+    if (event.target.id === 'save-profile') { state.profile = { ...state.profile, name: $('#profile-name').value, email: $('#profile-email').value, phone: $('#profile-phone').value }; persist(); toast('Perfil guardado'); }
+    if (event.target.id === 'save-address') { state.profile.address = $('#profile-address').value; persist(); toast('Dirección guardada'); }
+  });
+
+  document.addEventListener('submit', (event) => {
+    if (event.target.id === 'product-form') saveProduct(event);
+    if (event.target.id === 'coupon-form') saveCoupon(event);
+    if (event.target.id === 'settings-form') saveSettings(event);
+  });
+  document.addEventListener('change', (event) => {
+    if (event.target.matches('[data-order-status]')) updateOrderStatus(event.target.dataset.orderStatus, event.target.value);
+  });
+
+  $('#btn-theme').onclick = () => setTheme(state.theme === 'light' ? 'dark' : 'light');
+  $('#logo-home').onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+  $('#btn-explorar').onclick = () => $('#catalogo').scrollIntoView({ behavior: 'smooth' });
+  $$('[data-scroll-catalog]').forEach((button) => button.onclick = () => $('#catalogo').scrollIntoView({ behavior: 'smooth' }));
+  $('#search').oninput = (event) => { state.filters.query = event.target.value; renderCatalog(); };
+  $('#priceRange').oninput = (event) => { state.filters.maxPrice = Number(event.target.value); $('#priceLabel').textContent = money(state.filters.maxPrice); renderCatalog(); };
+  $('#sortSelect').onchange = (event) => { state.filters.sort = event.target.value; renderCatalog(); };
+  $('#btn-clear').onclick = () => { state.filters = { categories: [], maxPrice: 80000, sizes: [], colors: [], query: '', sort: 'Más relevantes' }; $('#search').value = ''; $('#priceRange').value = '80000'; $('#priceLabel').textContent = money(80000); $('#sortSelect').value = 'Más relevantes'; renderCategories(); renderCatalog(); };
+  $('#btn-fav').onclick = () => { $('#panel-cuenta').classList.add('open'); renderAccount('favoritos'); };
+  $('#btn-account').onclick = () => { $('#panel-cuenta').classList.add('open'); renderAccount('perfil'); };
+  $('#btn-cart').onclick = openCart;
+  $('#close-cart').onclick = closeCart;
+  $('#drawer-backdrop').onclick = closeCart;
+  $('#mp-add').onclick = addSelectedToCart;
+  $('#mp-fav').onclick = () => state.selectedProduct && toggleFavorite(state.selectedProduct.id);
+  $('#apply-coupon').onclick = () => applyCoupon();
+  $('#activate-promo').onclick = () => { $('#coupon-input').value = state.settings.promoCode; openCart(); if (state.cart.length) applyCoupon(state.settings.promoCode); };
+  $('#go-checkout').onclick = () => { const sum = totals(); if (!state.cart.length) return; $('#ck-nombre').value = state.profile.name; $('#ck-email').value = state.profile.email; $('#ck-phone').value = state.profile.phone; $('#ck-dir').value = state.profile.address; $('#ck-total').textContent = money(sum.total); $('#modal-checkout').classList.add('open'); };
+  $('#checkout-form').onsubmit = submitOrder;
+  $('#open-admin').onclick = ensureAdmin;
+  $('#admin-login-form').onsubmit = adminLogin;
+  $('#admin-logout').onclick = async () => { await api('/api/admin/logout', { method: 'POST' }); state.admin.authenticated = false; $('#panel-admin').classList.remove('open'); toast('Sesión cerrada'); };
+  $$('.bn-item').forEach((button) => button.onclick = () => { const nav = button.dataset.nav; if (nav === 'inicio') window.scrollTo({ top: 0, behavior: 'smooth' }); if (nav === 'buscar') $('#catalogo').scrollIntoView({ behavior: 'smooth' }); if (nav === 'favoritos') { $('#panel-cuenta').classList.add('open'); renderAccount('favoritos'); } if (nav === 'carrito') openCart(); if (nav === 'cuenta') { $('#panel-cuenta').classList.add('open'); renderAccount('perfil'); } });
+  $$('.modal').forEach((modal) => modal.addEventListener('click', (event) => { if (event.target === modal) modal.classList.remove('open'); }));
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { $$('.modal.open').forEach((modal) => modal.classList.remove('open')); closeCart(); } });
+  window.addEventListener('scroll', () => $('#hero').style.setProperty('--par', `${window.scrollY * 0.15}px`));
+}
+
+async function init() {
+  setTheme(state.theme);
+  bindEvents();
+  try {
+    const store = await api('/api/store');
+    state.store = store;
+    state.products = store.products;
+    state.settings = store.settings;
+    state.categories = store.categories;
+    applyStoreSettings();
+    renderCategories();
+    renderCatalog();
+    renderCart();
+  } catch (error) {

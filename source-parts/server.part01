@@ -1,0 +1,292 @@
+    return text(res, 200, svg, 'image/svg+xml; charset=utf-8', { 'Cache-Control': 'public, max-age=31536000, immutable' });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/coupons/validate') {
+    const body = await readJsonBody(req);
+    const state = await readStore();
+    const calculated = calculateCart(state, body.items, body.code);
+    const coupon = validateCoupon(state, body.code, calculated.subtotal);
+    return json(res, 200, {
+      code: coupon.code,
+      type: coupon.type,
+      discount: calculated.discount,
+      shippingFree: coupon.type === 'shipping',
+      total: calculated.total,
+    });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/orders') {
+    const body = await readJsonBody(req);
+    const customerName = String(body.customerName || '').trim();
+    const email = String(body.email || '').trim().toLowerCase();
+    const phone = String(body.phone || '').trim();
+    const address = String(body.address || '').trim();
+    if (!customerName || !/^\S+@\S+\.\S+$/.test(email) || !phone || !address) throw new HttpError(400, 'Completá nombre, email, teléfono y dirección');
+    const order = await updateStore((state) => {
+      const calculated = calculateCart(state, body.items, body.couponCode);
+      const createdAt = new Date().toISOString();
+      const id = `LUA-${createdAt.slice(0, 10).replaceAll('-', '')}-${crypto.randomInt(1000, 10000)}`;
+      const nextOrder = {
+        id,
+        createdAt,
+        customerName,
+        email,
+        phone,
+        address,
+        paymentMethod: String(body.paymentMethod || 'SINPE Móvil'),
+        ...calculated,
+        status: 'Pendiente',
+      };
+      for (const line of calculated.items) {
+        const product = state.products.find((item) => item.id === line.productId);
+        product.stock -= line.quantity;
+        product.vendidos += line.quantity;
+        product.updatedAt = createdAt;
+        state.movements.unshift({
+          id: crypto.randomUUID(),
+          createdAt,
+          productId: product.id,
+          productName: product.nombre,
+          type: 'salida',
+          quantity: -line.quantity,
+          note: `Pedido ${id}`,
+        });
+      }
+      state.orders.unshift(nextOrder);
+      rebuildCustomer(state, email);
+      return nextOrder;
+    });
+    return json(res, 201, order);
+  }
+
+  if (req.method === 'POST' && pathname === '/api/admin/login') {
+    checkLoginRate(req);
+    const body = await readJsonBody(req);
+    if (!safeEqualText(body.token, ADMIN_TOKEN)) throw new HttpError(401, 'Token de administración inválido');
+    return json(res, 200, { authenticated: true }, { 'Set-Cookie': cookieHeader(createSession()) });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/admin/logout') {
+    return json(res, 200, { authenticated: false }, { 'Set-Cookie': cookieHeader('', 0) });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/session') {
+    requireAdmin(req);
+    return json(res, 200, { authenticated: true });
+  }
+
+  if (pathname.startsWith('/api/admin/')) requireAdmin(req);
+
+  if (req.method === 'GET' && pathname === '/api/admin/dashboard') {
+    return json(res, 200, dashboard(await readStore()));
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/products') {
+    return json(res, 200, (await readStore()).products);
+  }
+
+  if (req.method === 'POST' && pathname === '/api/admin/products') {
+    const body = await readJsonBody(req);
+    const product = normalizeProduct(body);
+    await updateStore((state) => {
+      state.products.unshift(product);
+      if (product.stock) state.movements.unshift({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), productId: product.id, productName: product.nombre, type: 'entrada', quantity: product.stock, note: 'Producto creado' });
+    });
+    return json(res, 201, product);
+  }
+
+  const productMatch = pathname.match(/^\/api\/admin\/products\/([^/]+)$/);
+  if (productMatch && req.method === 'PUT') {
+    const id = decodeURIComponent(productMatch[1]);
+    const body = await readJsonBody(req);
+    const product = await updateStore((state) => {
+      const index = state.products.findIndex((item) => item.id === id);
+      if (index < 0) throw new HttpError(404, 'Producto no encontrado');
+      const previous = state.products[index];
+      const next = normalizeProduct(body, previous);
+      if (next.stock !== previous.stock) state.movements.unshift({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), productId: next.id, productName: next.nombre, type: 'ajuste', quantity: next.stock - previous.stock, note: 'Edición del producto' });
+      state.products[index] = next;
+      return next;
+    });
+    return json(res, 200, product);
+  }
+
+  if (productMatch && req.method === 'DELETE') {
+    const id = decodeURIComponent(productMatch[1]);
+    await updateStore((state) => {
+      const product = state.products.find((item) => item.id === id);
+      if (!product) throw new HttpError(404, 'Producto no encontrado');
+      product.activo = false;
+      product.updatedAt = new Date().toISOString();
+    });
+    return json(res, 200, { success: true });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/admin/inventory') {
+    const body = await readJsonBody(req);
+    const quantity = Math.trunc(Number(body.quantity));
+    if (!body.productId || !Number.isFinite(quantity) || quantity === 0) throw new HttpError(400, 'Producto y cantidad válida son obligatorios');
+    const product = await updateStore((state) => {
+      const item = state.products.find((candidate) => candidate.id === String(body.productId));
+      if (!item) throw new HttpError(404, 'Producto no encontrado');
+      if (item.stock + quantity < 0) throw new HttpError(400, 'El ajuste dejaría el stock en negativo');
+      item.stock += quantity;
+      item.updatedAt = new Date().toISOString();
+      state.movements.unshift({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), productId: item.id, productName: item.nombre, type: quantity > 0 ? 'entrada' : 'ajuste', quantity, note: String(body.note || 'Ajuste manual') });
+      return item;
+    });
+    return json(res, 200, product);
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/orders') return json(res, 200, (await readStore()).orders);
+
+  const orderMatch = pathname.match(/^\/api\/admin\/orders\/([^/]+)$/);
+  if (orderMatch && req.method === 'PATCH') {
+    const id = decodeURIComponent(orderMatch[1]);
+    const body = await readJsonBody(req);
+    const status = String(body.status || '');
+    if (!ORDER_STATUSES.has(status)) throw new HttpError(400, 'Estado inválido');
+    const order = await updateStore((state) => {
+      const item = state.orders.find((candidate) => candidate.id === id);
+      if (!item) throw new HttpError(404, 'Pedido no encontrado');
+      const wasCancelled = item.status === 'Cancelado';
+      const willCancel = status === 'Cancelado';
+      if (!wasCancelled && willCancel) {
+        for (const line of item.items) {
+          const product = state.products.find((candidate) => candidate.id === line.productId);
+          if (!product) continue;
+          product.stock += line.quantity;
+          product.vendidos = Math.max(0, product.vendidos - line.quantity);
+          state.movements.unshift({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), productId: product.id, productName: product.nombre, type: 'entrada', quantity: line.quantity, note: `Cancelación ${id}` });
+        }
+      }
+      if (wasCancelled && !willCancel) {
+        for (const line of item.items) {
+          const product = state.products.find((candidate) => candidate.id === line.productId);
+          if (!product || product.stock < line.quantity) throw new HttpError(409, `No hay stock para reactivar ${line.name}`);
+        }
+        for (const line of item.items) {
+          const product = state.products.find((candidate) => candidate.id === line.productId);
+          product.stock -= line.quantity;
+          product.vendidos += line.quantity;
+          state.movements.unshift({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), productId: product.id, productName: product.nombre, type: 'salida', quantity: -line.quantity, note: `Reactivación ${id}` });
+        }
+      }
+      item.status = status;
+      rebuildCustomer(state, item.email);
+      return item;
+    });
+    return json(res, 200, order);
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/coupons') return json(res, 200, (await readStore()).coupons);
+
+  if (req.method === 'POST' && pathname === '/api/admin/coupons') {
+    const body = await readJsonBody(req);
+    const code = String(body.code || '').trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{3,24}$/.test(code)) throw new HttpError(400, 'Código de cupón inválido');
+    const coupon = {
+      code,
+      type: body.type === 'shipping' ? 'shipping' : 'percent',
+      value: body.type === 'shipping' ? 0 : Math.min(100, Math.max(0, Number(body.value || 0))),
+      min: Math.max(0, Number(body.min || 0)),
+      active: body.active !== false,
+      expiresAt: body.expiresAt ? new Date(body.expiresAt).toISOString() : null,
+    };
+    await updateStore((state) => {
+      const index = state.coupons.findIndex((item) => item.code === code);
+      if (index >= 0) state.coupons[index] = coupon;
+      else state.coupons.unshift(coupon);
+    });
+    return json(res, 201, coupon);
+  }
+
+  if (req.method === 'DELETE' && pathname === '/api/admin/coupons') {
+    const code = String(url.searchParams.get('code') || '').toUpperCase();
+    await updateStore((state) => {
+      const before = state.coupons.length;
+      state.coupons = state.coupons.filter((item) => item.code !== code);
+      if (state.coupons.length === before) throw new HttpError(404, 'Cupón no encontrado');
+    });
+    return json(res, 200, { success: true });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/settings') return json(res, 200, (await readStore()).settings);
+
+  if (req.method === 'PUT' && pathname === '/api/admin/settings') {
+    const body = await readJsonBody(req);
+    const settings = await updateStore((state) => {
+      state.settings = {
+        nombre: String(body.nombre ?? state.settings.nombre).trim() || 'LÚA',
+        moneda: 'CRC',
+        iva: Math.min(100, Math.max(0, Number(body.iva ?? state.settings.iva))),
+        envio: Math.max(0, Number(body.envio ?? state.settings.envio)),
+        envioGratis: Math.max(0, Number(body.envioGratis ?? state.settings.envioGratis)),
+        whatsapp: String(body.whatsapp ?? state.settings.whatsapp).replace(/[^0-9]/g, ''),
+        heroTitulo: String(body.heroTitulo ?? state.settings.heroTitulo).trim(),
+        heroSubtitulo: String(body.heroSubtitulo ?? state.settings.heroSubtitulo).trim(),
+        promoCode: String(body.promoCode ?? state.settings.promoCode).trim().toUpperCase(),
+      };
+      return state.settings;
+    });
+    return json(res, 200, settings);
+  }
+
+  throw new HttpError(404, 'Ruta API no encontrada');
+}
+
+const mimeTypes = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+};
+
+async function serveStatic(req, res, url) {
+  let pathname = decodeURIComponent(url.pathname);
+  if (pathname === '/') pathname = '/index.html';
+  const normalized = path.normalize(pathname).replace(/^([/\\])+/, '');
+  const filePath = path.join(PUBLIC_DIR, normalized);
+  if (!filePath.startsWith(PUBLIC_DIR)) throw new HttpError(403, 'Ruta no permitida');
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) throw new Error('not-file');
+    const content = await fs.readFile(filePath);
+    return text(res, 200, content, mimeTypes[path.extname(filePath).toLowerCase()] || 'application/octet-stream', {
+      'Cache-Control': pathname === '/index.html' ? 'no-cache' : 'public, max-age=3600',
+    });
+  } catch {
+    if (!path.extname(pathname)) {
+      const content = await fs.readFile(path.join(PUBLIC_DIR, 'index.html'));
+      return text(res, 200, content, 'text/html; charset=utf-8', { 'Cache-Control': 'no-cache' });
+    }
+    throw new HttpError(404, 'Archivo no encontrado');
+  }
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
+    else await serveStatic(req, res, url);
+  } catch (error) {
+    const status = error instanceof HttpError ? error.status : 500;
+    if (status === 500) console.error(error);
+    json(res, status, { error: error.message || 'Error interno del servidor' });
+  }
+});
+
+if (require.main === module) {
+  server.listen(PORT, HOST, () => {
+    console.log(`LÚA Commerce disponible en http://${HOST}:${PORT}`);
+    if (ADMIN_TOKEN === 'lua-demo-admin') console.warn('Advertencia: cambiá ADMIN_TOKEN antes de publicar.');
+  });
+}
+
+module.exports = { server, readStore, updateStore, calculateCart, dashboard };
