@@ -3,15 +3,16 @@
   "version": "2.0.0",
   "private": true,
   "description": "Tienda LÚA full-stack sin dependencias externas",
-  "engines": { "node": ">=18" },
+  "engines": { "node": "22.x" },
   "scripts": {
     "assemble": "node scripts-assemble.js",
+    "vercel-build": "npm run assemble",
     "prestart": "npm run assemble",
     "start": "node server.js",
     "predev": "npm run assemble",
     "dev": "node --watch server.js",
     "precheck": "npm run assemble",
-    "check": "node --check server.js && node --check public/app.js",
+    "check": "node --check server.js && node --check public/app.js && node --check api/index.js",
     "pretest": "npm run assemble",
     "test": "node --test tests/*.test.js"
   }
