@@ -1,11 +1,11 @@
 'use strict';
 
 const fs = require('node:fs');
-const path = require('node:path');
+const seedStore = require('../data/store.json');
 
 const runtimeStore = '/tmp/lua-store.json';
 if (!fs.existsSync(runtimeStore)) {
-  fs.copyFileSync(path.join(process.cwd(), 'data', 'store.json'), runtimeStore);
+  fs.writeFileSync(runtimeStore, JSON.stringify(seedStore, null, 2), 'utf8');
 }
 process.env.STORE_DATA_PATH = runtimeStore;
 
